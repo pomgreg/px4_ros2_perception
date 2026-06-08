@@ -7,7 +7,7 @@
 ## Installation
 1. git clone ce repo
 2. Cp px4_patches/4001_gz_x500 in PX4-Autopilot/ROMFS/.../airframes/
-3. Cp px4_patches/x500_model.sdf in PX4-Autopilot/Tools/simulation/gz/models/x500/model.sdf
+3. Cp px4_patches/model.sdf in PX4-Autopilot/Tools/simulation/gz/models/x500/model.sdf
 4. colcon build
 5. source install/setup.bash
 
