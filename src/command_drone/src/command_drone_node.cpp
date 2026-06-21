@@ -10,6 +10,11 @@
 #include <thread>
 #include <iostream>
 
+#include <sys/select.h>
+#include <unistd.h>
+#include <termios.h>
+#include <fcntl.h>
+
 using namespace std::chrono_literals;
 
 class OffboardControl : public rclcpp::Node
@@ -40,6 +45,19 @@ public:
 			});
 
 		offboard_setpoint_counter_ = 0;
+		m_pos_trajectory = {0,0,-2};
+
+		termios newt;
+		m_tty_fd = open("/dev/tty", O_RDONLY | O_NONBLOCK);
+		// Save terminal settings
+		tcgetattr(m_tty_fd, &m_oldt);
+		newt = m_oldt;
+		// Disable line buffering and echo
+		newt.c_lflag &= ~(ICANON | ECHO);
+		tcsetattr(m_tty_fd, TCSANOW, &newt);
+		// Make stdin non-blocking
+		m_oldf = fcntl(m_tty_fd, F_GETFL, 0);
+		fcntl(m_tty_fd, F_SETFL, m_oldf | O_NONBLOCK);
 		
 		timer_ = this->create_wall_timer(100ms, [this]() {
 			if (m_pre_flight_checks_pass.pre_flight_checks_pass == true)
@@ -48,23 +66,38 @@ public:
 				publish_offboard_control_mode();
 				publish_trajectory_setpoint();
 
+				if (offboard_setpoint_counter_ == 10) {
+					this->arm();
+				}
+
+
 				if (offboard_setpoint_counter_ == 15) {
 					this->publish_vehicle_command(
 						px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
 				}
 
-				if (offboard_setpoint_counter_ == 10) {
-					this->arm();
-				}
 
 				if (offboard_setpoint_counter_ <= 15) {
 					offboard_setpoint_counter_++;
-				}				
+				}	
 			}
 		});
+
+		m_key_thread = std::thread(&OffboardControl::control_drone_key, this);
+
 	}
+	~OffboardControl(){
+		m_running = false;
+		m_key_thread.join();
+		// Restore settings
+		tcsetattr(m_tty_fd, TCSANOW, &m_oldt);
+		fcntl(m_tty_fd, F_SETFL, m_oldf);
+		
+	}
+
 	void arm();
 	void disarm();
+	void control_drone_key();
 
 private:
 	rclcpp::TimerBase::SharedPtr timer_;
@@ -80,6 +113,15 @@ private:
 	uint64_t offboard_setpoint_counter_;   //!< counter for the number of setpoints sent
 
 	px4_msgs::msg::VehicleStatus m_pre_flight_checks_pass;
+
+	std::array<float, 3> m_pos_trajectory;
+	std::mutex m_m_trajectory;
+	std::thread m_key_thread;
+	std::atomic<bool> m_running{true};
+
+	termios m_oldt;
+	int m_oldf;
+	int m_tty_fd;
 
 	void publish_offboard_control_mode();
 	void publish_trajectory_setpoint();
@@ -130,8 +172,9 @@ void OffboardControl::publish_offboard_control_mode()
  */
 void OffboardControl::publish_trajectory_setpoint()
 {
+	std::lock_guard<std::mutex> lock(m_m_trajectory); 
 	px4_msgs::msg::TrajectorySetpoint msg{};
-	msg.position = {0.0, 0.0, -5.0};
+	msg.position = m_pos_trajectory;
 	msg.yaw = -3.14; // [-PI:PI]
 	msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
 	trajectory_setpoint_publisher_->publish(msg);
@@ -156,6 +199,27 @@ void OffboardControl::publish_vehicle_command(uint16_t command, float param1, fl
 	msg.from_external = true;
 	msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
 	vehicle_command_publisher_->publish(msg);
+}
+
+void OffboardControl::control_drone_key(){
+    char ch;
+    while(m_running)
+    {
+        ssize_t n = read(m_tty_fd, &ch, 1);
+        if (n > 0) {
+            std::lock_guard<std::mutex> lock(m_m_trajectory); 
+            if (ch == 'z') { 
+				m_pos_trajectory[2] -= 0.1; 
+			}
+            if (ch == 's') { 
+				m_pos_trajectory[2] += 0.1; 
+			}
+            if (ch == 'q') { 
+				break; 
+			}
+        }
+        std::this_thread::sleep_for(10ms);
+    }
 }
 
 int main(int argc, char *argv[])
