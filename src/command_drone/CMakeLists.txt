@@ -11,7 +11,11 @@ find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 
-add_executable(command_drone_node src/command_drone_node.cpp)
+add_executable(command_drone_node 
+  src/CommandDroneNode.cpp
+  src/KeyControl.cpp
+  src/main.cpp
+)
 target_include_directories(command_drone_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
